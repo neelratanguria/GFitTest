@@ -10,27 +10,43 @@ import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.util.Log;
+import android.util.Pair;
 
 import com.google.android.gms.auth.api.signin.GoogleSignIn;
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
 import com.google.android.gms.fitness.Fitness;
 import com.google.android.gms.fitness.FitnessOptions;
+import com.google.android.gms.fitness.SessionsClient;
 import com.google.android.gms.fitness.data.Bucket;
 import com.google.android.gms.fitness.data.DataPoint;
 import com.google.android.gms.fitness.data.DataSet;
 import com.google.android.gms.fitness.data.DataType;
 import com.google.android.gms.fitness.data.Field;
+import com.google.android.gms.fitness.data.Session;
 import com.google.android.gms.fitness.request.DataReadRequest;
+import com.google.android.gms.fitness.request.SessionReadRequest;
 import com.google.android.gms.fitness.result.DataReadResponse;
+import com.google.android.gms.fitness.result.SessionReadResponse;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.List;
+import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
@@ -39,10 +55,32 @@ public class MainActivity extends AppCompatActivity {
     String TAG = "NEEL";
     GoogleSignInAccount account;
 
+    static String PERIOD_START_DATE_TIME = "2020-08-9T12:00:00Z";
+    static String PERIOD_END_DATE_TIME = "2020-08-17T12:00:00Z";
+
+    private long periodStartMillis;
+    private long periodEndMillis;
+
+    private long millisFromRfc339DateString(String dateString) {
+        try {
+            return new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+                    .parse(dateString).getTime();
+        } catch (ParseException e) {
+            e.printStackTrace();
+            return Long.parseLong(null);
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+
+
+        // Defines the start and end of the period of interest in this example.
+        periodStartMillis = millisFromRfc339DateString(PERIOD_START_DATE_TIME);
+        periodEndMillis = millisFromRfc339DateString(PERIOD_END_DATE_TIME);
 
         Log.d("NEEL", "onCreate: start");
         if (ContextCompat.checkSelfPermission(getApplicationContext(),
@@ -59,6 +97,8 @@ public class MainActivity extends AppCompatActivity {
                     .addDataType(DataType.TYPE_STEP_COUNT_DELTA, FitnessOptions.ACCESS_WRITE)
                     .addDataType(DataType.AGGREGATE_STEP_COUNT_DELTA, FitnessOptions.ACCESS_READ)
                     .addDataType(DataType.AGGREGATE_STEP_COUNT_DELTA, FitnessOptions.ACCESS_WRITE)
+                    .addDataType(DataType.TYPE_ACTIVITY_SEGMENT, FitnessOptions.ACCESS_READ)
+                    .addDataType(DataType.TYPE_SLEEP_SEGMENT, FitnessOptions.ACCESS_READ)
                     .build();
 
             account = GoogleSignIn.getAccountForExtension(this,
@@ -74,7 +114,8 @@ public class MainActivity extends AppCompatActivity {
                 Log.d("NEEL", "onCreate: Request permission");
             } else {
 //                accessExerciseGoogleFit(fitnessOptions);
-                readHistoryData();
+                // readHistoryData();
+                readSleepSessions();
                 Log.d("NEEL", "onCreate: Access data");
             }
         }
@@ -236,5 +277,112 @@ public class MainActivity extends AppCompatActivity {
                 dumpDataSet(dataSet);
             }
         }
+    }
+
+
+
+    // Sleep
+    private void readSleepSessions() {
+         SessionsClient client = Fitness.getSessionsClient(this, account);
+
+         SessionReadRequest sessionReadRequest = new SessionReadRequest.Builder()
+                .read(DataType.TYPE_SLEEP_SEGMENT)
+                // By default, only activity sessions are included, not sleep sessions. Specifying
+                // includeSleepSessions also sets the behaviour to *exclude* activity sessions.
+                .includeSleepSessions()
+                .readSessionsFromAllApps()
+                .setTimeInterval(periodStartMillis, periodEndMillis, TimeUnit.MILLISECONDS)
+                .build();
+
+        client.readSession(sessionReadRequest)
+                .addOnSuccessListener(sessionReadResponse -> {
+                    Log.d(TAG, "readSleepSessions: Sleep session read successful");
+                    try {
+                        JSONObject sleepData = dumpSleepSessions(sessionReadResponse);
+                        Log.d(TAG, "readSleepSessions: "+sleepData);
+                    } catch (JSONException e) {
+                        e.printStackTrace();
+                    }
+                })
+                .addOnFailureListener(e -> {
+                    Log.d(TAG, "readSleepSessions: Sleep session read not successful");
+                });
+    }
+
+    private JSONObject dumpSleepSessions(SessionReadResponse response) throws JSONException {
+        JSONObject sleepData = new JSONObject();
+        JSONArray sleepSessions = new JSONArray();
+        for (Session session : response.getSessions()) {
+            JSONObject sleepSession = dumpSleepSession(session, response.getDataSet(session));
+            sleepSessions.put(sleepSession);
+        }
+        sleepData.put("sleep_data", sleepSessions);
+        return sleepData;
+    }
+
+    private JSONObject dumpSleepSession(Session session,List<DataSet> dataSets) throws JSONException {
+        JSONObject sleepSession = new JSONObject();
+        Pair startEndTimePair = dumpSleepSessionMetadata(session);
+        Long totalSleepForNight = calculateSessionDuration(session);
+        JSONArray sleepDataPoints = dumpSleepDataSets(dataSets);
+        sleepSession.put("start_time", startEndTimePair.first);
+        sleepSession.put("end_time", startEndTimePair.second);
+        sleepSession.put("total_sleep", totalSleepForNight.intValue());
+        sleepSession.put("stages", sleepDataPoints);
+        return sleepSession;
+    }
+
+    private Pair<String, String> dumpSleepSessionMetadata(Session session) {
+        Pair<String, String> timePair = getSessionStartAndEnd(session);
+        String startDateTime =  timePair.first;
+        String endDateTime = timePair.second;
+
+        Long totalSleepForNight = calculateSessionDuration(session);
+        Log.i(TAG, startDateTime+" to "+endDateTime+" ("+totalSleepForNight+" mins)");
+        return timePair;
+    }
+
+    List<String> SLEEP_STAGES = Arrays.asList(
+            "Unused",
+            "Awake (during sleep)",
+            "Sleep",
+            "Out-of-bed",
+            "Light sleep",
+            "Deep sleep",
+            "REM sleep"
+    );
+
+    private JSONArray dumpSleepDataSets(List<DataSet> dataSets) throws JSONException {
+        JSONArray sleepDataPointsJson = new JSONArray();
+        for (DataSet dataSet : dataSets) {
+            for (DataPoint dataPoint : dataSet.getDataPoints()) {
+                int sleepStageOrdinal = dataPoint.getValue(Field.FIELD_SLEEP_SEGMENT_TYPE).asInt();
+                String sleepStage = SLEEP_STAGES.get(sleepStageOrdinal);
+
+                Long durationMillis = dataPoint.getEndTime(TimeUnit.MILLISECONDS) - dataPoint.getStartTime(TimeUnit.MILLISECONDS);
+                Long duration = TimeUnit.MILLISECONDS.toMinutes(durationMillis);
+                Log.i(TAG, "\t"+sleepStage+": "+duration+" (mins)");
+
+                JSONObject sleepDpJson = new JSONObject();
+                sleepDpJson.put("type", sleepStage);
+                sleepDpJson.put("mins", duration.intValue());
+                sleepDataPointsJson.put(sleepDpJson);
+            }
+        }
+        return sleepDataPointsJson;
+    }
+
+    private Pair<String, String> getSessionStartAndEnd(Session session)
+    {
+        DateFormat dateFormat = DateFormat.getDateTimeInstance();
+        String startDateTime = dateFormat.format(session.getStartTime(TimeUnit.MILLISECONDS));
+        String endDateTime = dateFormat.format(session.getEndTime(TimeUnit.MILLISECONDS));
+        Pair<String, String> mPair = new Pair<>(startDateTime, endDateTime);
+        return mPair;
+    }
+
+    private Long calculateSessionDuration(Session session) {
+        Long total = session.getEndTime(TimeUnit.MILLISECONDS) - session.getStartTime(TimeUnit.MILLISECONDS);
+        return TimeUnit.MILLISECONDS.toMinutes(total);
     }
 }
