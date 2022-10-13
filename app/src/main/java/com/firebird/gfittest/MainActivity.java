@@ -405,14 +405,6 @@ public class MainActivity extends AppCompatActivity {
         //SessionsClient client = Fitness.getSessionsClient(this, account);
         HistoryClient client = Fitness.getHistoryClient(this, account);
 
-//        SessionReadRequest sessionReadRequest = new SessionReadRequest.Builder()
-//                .read(DataType.TYPE_HEART_RATE_BPM)
-//                // By default, only activity sessions are included, not sleep sessions. Specifying
-//                // includeSleepSessions also sets the behaviour to *exclude* activity sessions.
-//                .readSessionsFromAllApps()
-//                .setTimeInterval(periodStartMillisHR, periodEndMillisHR, TimeUnit.MILLISECONDS)
-//                .build();
-
         DataReadRequest hrReadRequest = new DataReadRequest.Builder()
                 // The data request can specify multiple data types to return, effectively
                 // combining multiple data queries into one call.
@@ -431,8 +423,8 @@ public class MainActivity extends AppCompatActivity {
                 .addOnSuccessListener(dataReadResponse -> {
                     Log.d(TAG, "readHeartRateData: Heart rate read successful");
                     try {
-                        JSONObject sleepData = dumpHeartRate(dataReadResponse);
-//                        Log.d(TAG, "readHeartRateData: "+sleepData);
+                        JSONObject hrData = dumpHeartRate(dataReadResponse);
+                        Log.d(TAG, "readHeartRateData: "+hrData);
                     } catch (JSONException e) {
                         e.printStackTrace();
                     }
@@ -440,54 +432,30 @@ public class MainActivity extends AppCompatActivity {
                 .addOnFailureListener(e -> {
 
                 });
-
-//        client.readSession(sessionReadRequest)
-//                .addOnSuccessListener(sessionReadResponse -> {
-//                    Log.d(TAG, "readHeartRateData: Heart rate read successful");
-//                    try {
-//                        JSONObject sleepData = dumpHeartRate(sessionReadResponse);
-////                        Log.d(TAG, "readHeartRateData: "+sleepData);
-//                    } catch (JSONException e) {
-//                        e.printStackTrace();
-//                    }
-//                })
-//                .addOnFailureListener(e -> {
-//                    Log.d(TAG, "readHeartRateData: Heart Rate read not successful");
-//                });
     }
 
     private JSONObject dumpHeartRate(DataReadResponse response) throws JSONException {
-        JSONObject sleepData = new JSONObject();
-        JSONArray sleepSessions = new JSONArray();
-        Log.d(TAG, "dumpHeartRate: Number of buckets"+response.getBuckets().size());
+        JSONObject heartRateData = new JSONObject();
+        JSONArray heartRates = new JSONArray();
 
-        Log.d(TAG, "dumpHeartRate: Number of dataset"+response.getDataSets().size());
         for (Bucket bucket : response.getBuckets()) {
-            Log.d(TAG, "dumpHeartRate: "+bucket);
             for (DataSet dataSet: bucket.getDataSets()) {
-                Log.d(TAG, "dumpHeartRate: "+bucket+dataSet);
                 for(DataPoint dataPoint : dataSet.getDataPoints()) {
-                    Log.d(TAG, "dumpHeartRate: "+dataPoint);
+                    JSONObject dataPointJson = new JSONObject();
                     DateFormat dateFormat = DateFormat.getDateTimeInstance();
-
+                    String endDateTime = dateFormat.format(dataPoint.getEndTime(TimeUnit.MILLISECONDS));
+                    dataPointJson.put("time", endDateTime);
                     for(Field field: dataPoint.getDataType().getFields()) {
-//                        String startDateTime = dateFormat.format(dataPoint.getStartTime(TimeUnit.MILLISECONDS));
-                        String endDateTime = dateFormat.format(dataPoint.getEndTime(TimeUnit.MILLISECONDS));
-//                        Log.d(TAG, "dumpHeartRate: StartTime: "+startDateTime+", EndTime: "+endDateTime);
                         Log.d(TAG, "dumpHeartRate: Time: "+endDateTime
                                 +" Heart Rate "+field.getName()+": "+dataPoint.getValue(field));
+                        dataPointJson.put(field.getName(), dataPoint.getValue(field));
                     }
-                    //dataPoint.getDataType().getFields();
+                   heartRates.put(dataPointJson);
                 }
             }
-//            JSONObject heartRateData = dumpSleepSession(session, response.getDataSet(session));
-//            sleepSessions.put(heartRateData);
         }
-        for(DataSet dataSet : response.getDataSets()) {
-            Log.d(TAG, "dumpHeartRate: "+dataSet);
-        }
-        sleepData.put("sleep_data", sleepSessions);
-        return sleepData;
+        heartRateData.put("heart_rates", heartRates);
+        return heartRateData;
     }
 
 }
