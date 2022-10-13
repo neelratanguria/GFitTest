@@ -16,6 +16,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn;
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
 import com.google.android.gms.fitness.Fitness;
 import com.google.android.gms.fitness.FitnessOptions;
+import com.google.android.gms.fitness.HistoryClient;
 import com.google.android.gms.fitness.SessionsClient;
 import com.google.android.gms.fitness.data.Bucket;
 import com.google.android.gms.fitness.data.DataPoint;
@@ -58,8 +59,14 @@ public class MainActivity extends AppCompatActivity {
     static String PERIOD_START_DATE_TIME = "2020-08-9T12:00:00Z";
     static String PERIOD_END_DATE_TIME = "2020-08-17T12:00:00Z";
 
+    static String HR_PERIOD_START_DATE_TIME = "2022-10-10T12:00:00Z";
+    static String HR_PERIOD_END_DATE_TIME = "2022-10-14T12:00:00Z";
+
     private long periodStartMillis;
     private long periodEndMillis;
+
+    private long periodStartMillisHR;
+    private long periodEndMillisHR;
 
     private long millisFromRfc339DateString(String dateString) {
         try {
@@ -82,6 +89,9 @@ public class MainActivity extends AppCompatActivity {
         periodStartMillis = millisFromRfc339DateString(PERIOD_START_DATE_TIME);
         periodEndMillis = millisFromRfc339DateString(PERIOD_END_DATE_TIME);
 
+        periodStartMillisHR = millisFromRfc339DateString(HR_PERIOD_START_DATE_TIME);
+        periodEndMillisHR = millisFromRfc339DateString(HR_PERIOD_END_DATE_TIME);
+
         Log.d("NEEL", "onCreate: start");
         if (ContextCompat.checkSelfPermission(getApplicationContext(),
                 Manifest.permission.ACTIVITY_RECOGNITION)
@@ -99,6 +109,7 @@ public class MainActivity extends AppCompatActivity {
                     .addDataType(DataType.AGGREGATE_STEP_COUNT_DELTA, FitnessOptions.ACCESS_WRITE)
                     .addDataType(DataType.TYPE_ACTIVITY_SEGMENT, FitnessOptions.ACCESS_READ)
                     .addDataType(DataType.TYPE_SLEEP_SEGMENT, FitnessOptions.ACCESS_READ)
+                    .addDataType(DataType.TYPE_HEART_RATE_BPM, FitnessOptions.ACCESS_READ)
                     .build();
 
             account = GoogleSignIn.getAccountForExtension(this,
@@ -115,7 +126,8 @@ public class MainActivity extends AppCompatActivity {
             } else {
 //                accessExerciseGoogleFit(fitnessOptions);
                 // readHistoryData();
-                readSleepSessions();
+                //readSleepSessions();
+                readHeartRateData();
                 Log.d("NEEL", "onCreate: Access data");
             }
         }
@@ -385,4 +397,97 @@ public class MainActivity extends AppCompatActivity {
         Long total = session.getEndTime(TimeUnit.MILLISECONDS) - session.getStartTime(TimeUnit.MILLISECONDS);
         return TimeUnit.MILLISECONDS.toMinutes(total);
     }
+
+
+
+    // Heart Rate
+    private void readHeartRateData() {
+        //SessionsClient client = Fitness.getSessionsClient(this, account);
+        HistoryClient client = Fitness.getHistoryClient(this, account);
+
+//        SessionReadRequest sessionReadRequest = new SessionReadRequest.Builder()
+//                .read(DataType.TYPE_HEART_RATE_BPM)
+//                // By default, only activity sessions are included, not sleep sessions. Specifying
+//                // includeSleepSessions also sets the behaviour to *exclude* activity sessions.
+//                .readSessionsFromAllApps()
+//                .setTimeInterval(periodStartMillisHR, periodEndMillisHR, TimeUnit.MILLISECONDS)
+//                .build();
+
+        DataReadRequest hrReadRequest = new DataReadRequest.Builder()
+                // The data request can specify multiple data types to return, effectively
+                // combining multiple data queries into one call.
+                // In this example, it's very unlikely that the request is for several hundred
+                // datapoints each consisting of a few steps and a timestamp.  The more likely
+                // scenario is wanting to see how many steps were walked per day, for 7 days.
+                .aggregate(DataType.TYPE_HEART_RATE_BPM)
+                // Analogous to a "Group By" in SQL, defines how data should be aggregated.
+                // bucketByTime allows for a time span, whereas bucketBySession would allow
+                // bucketing by "sessions", which would need to be defined in code.
+                .bucketByTime(1, TimeUnit.DAYS)
+                .setTimeRange(periodStartMillisHR, periodEndMillisHR, TimeUnit.MILLISECONDS)
+                .build();
+
+        client.readData(hrReadRequest)
+                .addOnSuccessListener(dataReadResponse -> {
+                    Log.d(TAG, "readHeartRateData: Heart rate read successful");
+                    try {
+                        JSONObject sleepData = dumpHeartRate(dataReadResponse);
+//                        Log.d(TAG, "readHeartRateData: "+sleepData);
+                    } catch (JSONException e) {
+                        e.printStackTrace();
+                    }
+                })
+                .addOnFailureListener(e -> {
+
+                });
+
+//        client.readSession(sessionReadRequest)
+//                .addOnSuccessListener(sessionReadResponse -> {
+//                    Log.d(TAG, "readHeartRateData: Heart rate read successful");
+//                    try {
+//                        JSONObject sleepData = dumpHeartRate(sessionReadResponse);
+////                        Log.d(TAG, "readHeartRateData: "+sleepData);
+//                    } catch (JSONException e) {
+//                        e.printStackTrace();
+//                    }
+//                })
+//                .addOnFailureListener(e -> {
+//                    Log.d(TAG, "readHeartRateData: Heart Rate read not successful");
+//                });
+    }
+
+    private JSONObject dumpHeartRate(DataReadResponse response) throws JSONException {
+        JSONObject sleepData = new JSONObject();
+        JSONArray sleepSessions = new JSONArray();
+        Log.d(TAG, "dumpHeartRate: Number of buckets"+response.getBuckets().size());
+
+        Log.d(TAG, "dumpHeartRate: Number of dataset"+response.getDataSets().size());
+        for (Bucket bucket : response.getBuckets()) {
+            Log.d(TAG, "dumpHeartRate: "+bucket);
+            for (DataSet dataSet: bucket.getDataSets()) {
+                Log.d(TAG, "dumpHeartRate: "+bucket+dataSet);
+                for(DataPoint dataPoint : dataSet.getDataPoints()) {
+                    Log.d(TAG, "dumpHeartRate: "+dataPoint);
+                    DateFormat dateFormat = DateFormat.getDateTimeInstance();
+
+                    for(Field field: dataPoint.getDataType().getFields()) {
+//                        String startDateTime = dateFormat.format(dataPoint.getStartTime(TimeUnit.MILLISECONDS));
+                        String endDateTime = dateFormat.format(dataPoint.getEndTime(TimeUnit.MILLISECONDS));
+//                        Log.d(TAG, "dumpHeartRate: StartTime: "+startDateTime+", EndTime: "+endDateTime);
+                        Log.d(TAG, "dumpHeartRate: Time: "+endDateTime
+                                +" Heart Rate "+field.getName()+": "+dataPoint.getValue(field));
+                    }
+                    //dataPoint.getDataType().getFields();
+                }
+            }
+//            JSONObject heartRateData = dumpSleepSession(session, response.getDataSet(session));
+//            sleepSessions.put(heartRateData);
+        }
+        for(DataSet dataSet : response.getDataSets()) {
+            Log.d(TAG, "dumpHeartRate: "+dataSet);
+        }
+        sleepData.put("sleep_data", sleepSessions);
+        return sleepData;
+    }
+
 }
