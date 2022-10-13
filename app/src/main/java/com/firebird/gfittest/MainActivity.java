@@ -1,16 +1,20 @@
 package com.firebird.gfittest;
 
-import androidx.annotation.NonNull;
+import static com.firebird.gfittest.StepCountReporter.APP_TAG;
+
+import android.Manifest;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import android.util.Pair;
+
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-
-import android.Manifest;
-import android.app.Activity;
-import android.content.pm.PackageManager;
-import android.os.Bundle;
-import android.util.Log;
-import android.util.Pair;
 
 import com.google.android.gms.auth.api.signin.GoogleSignIn;
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
@@ -27,9 +31,12 @@ import com.google.android.gms.fitness.request.DataReadRequest;
 import com.google.android.gms.fitness.request.SessionReadRequest;
 import com.google.android.gms.fitness.result.DataReadResponse;
 import com.google.android.gms.fitness.result.SessionReadResponse;
-import com.google.android.gms.tasks.OnFailureListener;
-import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
+import com.samsung.android.sdk.healthdata.HealthConnectionErrorResult;
+import com.samsung.android.sdk.healthdata.HealthConstants;
+import com.samsung.android.sdk.healthdata.HealthDataStore;
+import com.samsung.android.sdk.healthdata.HealthPermissionManager;
+import com.samsung.android.sdk.healthdata.HealthResultHolder;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -38,28 +45,139 @@ import org.json.JSONObject;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
-    String TAG = "NEEL";
-    GoogleSignInAccount account;
-
     static String PERIOD_START_DATE_TIME = "2020-08-9T12:00:00Z";
     static String PERIOD_END_DATE_TIME = "2020-08-17T12:00:00Z";
+    private static MainActivity mInstance = null;
+    String TAG = "NEEL";
+    private final HealthResultHolder.ResultListener<HealthPermissionManager.PermissionResult> mPermissionListener =
+            result -> {
+                Log.d(TAG, "Permission callback is received.");
+                Map<HealthPermissionManager.PermissionKey, Boolean> resultMap = result.getResultMap();
 
+                if (resultMap.containsValue(Boolean.FALSE)) {
+                    // Requesting permission fails
+                } else {
+                    // Get the current step count and display it
+                }
+            };
+    GoogleSignInAccount account;
+
+    /*  Samsung Health start */
+    List<String> SLEEP_STAGES = Arrays.asList(
+            "Unused",
+            "Awake (during sleep)",
+            "Sleep",
+            "Out-of-bed",
+            "Light sleep",
+            "Deep sleep",
+            "REM sleep"
+    );
     private long periodStartMillis;
     private long periodEndMillis;
+    private HealthDataStore mStore;
+    private HealthConnectionErrorResult mConnError;
+    private Set<HealthPermissionManager.PermissionKey> mKeySet;
+
+    /*  Samsung Health end */
+
+    /*  Samsung Health start */
+    private StepCountReporter mReporter;
+
+    private StepCountReporter.StepCountObserver mStepCountObserver = count -> {
+        Log.d(APP_TAG, "Step reported : " + count);
+    };
+
+    private final HealthDataStore.ConnectionListener mConnectionListener = new HealthDataStore.ConnectionListener() {
+
+        @Override
+        public void onConnected() {
+            Log.d(TAG, "Health data service is connected.");
+            HealthPermissionManager pmsManager = new HealthPermissionManager(mStore);
+
+            try {
+                // Check whether the permissions that this application needs are acquired
+                Map<HealthPermissionManager.PermissionKey, Boolean> resultMap = pmsManager.isPermissionAcquired(mKeySet);
+
+                if (resultMap.containsValue(Boolean.FALSE)) {
+                    // Request the permission for reading step counts if it is not acquired
+                    pmsManager.requestPermissions(mKeySet, MainActivity.this).setResultListener(mPermissionListener);
+                } else {
+                    // Get the current step count and display it
+                    // ...
+
+                    mReporter = new StepCountReporter(mStore, mStepCountObserver, new Handler(Looper.getMainLooper()));
+                    if (isPermissionAcquired()) {
+                        mReporter.start();
+                    } else {
+                        requestPermission();
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, e.getClass().getName() + " - " + e.getMessage());
+                Log.e(TAG, "Permission setting fails.");
+            }
+        }
+
+        @Override
+        public void onConnectionFailed(HealthConnectionErrorResult error) {
+            Log.d(TAG, "Health data service is not available.");
+            showConnectionFailureDialog(error);
+        }
+
+        @Override
+        public void onDisconnected() {
+            Log.d(TAG, "Health data service is disconnected.");
+        }
+    };
+
+    private boolean isPermissionAcquired() {
+        HealthPermissionManager.PermissionKey permKey = new HealthPermissionManager.PermissionKey(HealthConstants.StepCount.HEALTH_DATA_TYPE, HealthPermissionManager.PermissionType.READ);
+        HealthPermissionManager pmsManager = new HealthPermissionManager(mStore);
+        try {
+            // Check whether the permissions that this application needs are acquired
+            Map<HealthPermissionManager.PermissionKey, Boolean> resultMap = pmsManager.isPermissionAcquired(Collections.singleton(permKey));
+            return !resultMap.containsValue(Boolean.FALSE);
+        } catch (Exception e) {
+            Log.e(APP_TAG, "Permission request fails.", e);
+        }
+        return false;
+    }
+
+    private void requestPermission() {
+        HealthPermissionManager.PermissionKey permKey = new HealthPermissionManager.PermissionKey(HealthConstants.StepCount.HEALTH_DATA_TYPE, HealthPermissionManager.PermissionType.READ);
+        HealthPermissionManager pmsManager = new HealthPermissionManager(mStore);
+        try {
+            // Show user permission UI for allowing user to change options
+            pmsManager.requestPermissions(Collections.singleton(permKey), MainActivity.this)
+                    .setResultListener(result -> {
+                        Log.d(APP_TAG, "Permission callback is received.");
+                        Map<HealthPermissionManager.PermissionKey, Boolean> resultMap = result.getResultMap();
+
+                        if (resultMap.containsValue(Boolean.FALSE)) {
+                            Log.d(TAG, "requestPermission: Permission request denied");
+                        } else {
+                            // Get the current step count and display it
+                            mReporter.start();
+                        }
+                    });
+        } catch (Exception e) {
+            Log.e(APP_TAG, "Permission setting fails.", e);
+        }
+    }
 
     private long millisFromRfc339DateString(String dateString) {
         try {
@@ -77,7 +195,6 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
 
-
         // Defines the start and end of the period of interest in this example.
         periodStartMillis = millisFromRfc339DateString(PERIOD_START_DATE_TIME);
         periodEndMillis = millisFromRfc339DateString(PERIOD_END_DATE_TIME);
@@ -88,7 +205,7 @@ public class MainActivity extends AppCompatActivity {
                 != PackageManager.PERMISSION_GRANTED) {
             // Permission is not granted
             ActivityCompat.requestPermissions(MainActivity.this,
-                    new String[] {Manifest.permission.ACTIVITY_RECOGNITION},
+                    new String[]{Manifest.permission.ACTIVITY_RECOGNITION},
                     200);
 
         } else {
@@ -119,21 +236,80 @@ public class MainActivity extends AppCompatActivity {
                 Log.d("NEEL", "onCreate: Access data");
             }
         }
+
+        /*  Samsung Health start */
+
+        mInstance = this;
+        mKeySet = new HashSet<>();
+
+        mKeySet.add(new HealthPermissionManager
+                .PermissionKey(HealthConstants.StepCount.HEALTH_DATA_TYPE,
+                HealthPermissionManager.PermissionType.READ));
+        mKeySet.add(new HealthPermissionManager
+                .PermissionKey(HealthConstants.HeartRate.HEALTH_DATA_TYPE,
+                HealthPermissionManager.PermissionType.READ));
+
+        // Create a HealthDataStore instance and set its listener
+        mStore = new HealthDataStore(this, mConnectionListener);
+        // Request the connection to the health data store
+        mStore.connectService();
+
+        /*  Samsung Health end */
     }
 
-    private void dumpDataSet(DataSet dataSet) {
-        Log.i("Neel", "Data returned for Data type: "+dataSet.getDataType().getName());
-        for (DataPoint dp : dataSet.getDataPoints()) {
-            Log.i("Neel","Data point:");
-            Log.i("Neel","\tType: "+dp.getDataType().getName());
-            Log.i("Neel","\tStart: "+dp.getStartTime(TimeUnit.DAYS));
-            Log.i("Neel","\tEnd: "+dp.getEndTime(TimeUnit.DAYS));
-            for (Field field : dp.getDataType().getFields()) {
-                Log.i("Neel",
-                        "\tField: "+field.getName()
-                                + " Value: " +dp.getValue(field).asInt());
+    @Override
+    protected void onDestroy() {
+        /*  Samsung Health start */
+        mStore.disconnectService();
+        /*  Samsung Health end */
+        super.onDestroy();
+    }
+
+
+    /*  Samsung Health end */
+
+    private void showConnectionFailureDialog(HealthConnectionErrorResult error) {
+
+        AlertDialog.Builder alert = new AlertDialog.Builder(this);
+        mConnError = error;
+        String message = "Connection with Samsung Health is not available";
+
+        if (mConnError.hasResolution()) {
+            switch (error.getErrorCode()) {
+                case HealthConnectionErrorResult.PLATFORM_NOT_INSTALLED:
+                    message = "Please install Samsung Health";
+                    break;
+                case HealthConnectionErrorResult.OLD_VERSION_PLATFORM:
+                    message = "Please upgrade Samsung Health";
+                    break;
+                case HealthConnectionErrorResult.PLATFORM_DISABLED:
+                    message = "Please enable Samsung Health";
+                    break;
+                case HealthConnectionErrorResult.USER_AGREEMENT_NEEDED:
+                    message = "Please agree with Samsung Health policy";
+                    break;
+                default:
+                    message = "Please make Samsung Health available";
+                    break;
             }
         }
+
+        alert.setMessage(message);
+
+        alert.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int id) {
+                if (mConnError.hasResolution()) {
+                    mConnError.resolve(mInstance);
+                }
+            }
+        });
+
+        if (error.hasResolution()) {
+            alert.setNegativeButton("Cancel", null);
+        }
+
+        alert.show();
     }
 
 /*
@@ -216,7 +392,24 @@ public class MainActivity extends AppCompatActivity {
 
      */
 
-    /** Returns a [DataReadRequest] for all step count changes in the past week.  */
+    private void dumpDataSet(DataSet dataSet) {
+        Log.i("Neel", "Data returned for Data type: " + dataSet.getDataType().getName());
+        for (DataPoint dp : dataSet.getDataPoints()) {
+            Log.i("Neel", "Data point:");
+            Log.i("Neel", "\tType: " + dp.getDataType().getName());
+            Log.i("Neel", "\tStart: " + dp.getStartTime(TimeUnit.DAYS));
+            Log.i("Neel", "\tEnd: " + dp.getEndTime(TimeUnit.DAYS));
+            for (Field field : dp.getDataType().getFields()) {
+                Log.i("Neel",
+                        "\tField: " + field.getName()
+                                + " Value: " + dp.getValue(field).asInt());
+            }
+        }
+    }
+
+    /**
+     * Returns a [DataReadRequest] for all step count changes in the past week.
+     */
     DataReadRequest queryFitnessData() {
         // [START build_read_data_request]
         // Setting a start and end date using a range of 1 week before this moment.
@@ -260,7 +453,7 @@ public class MainActivity extends AppCompatActivity {
                 });
     }
 
-    private void printData( DataReadResponse dataReadResult) {
+    private void printData(DataReadResponse dataReadResult) {
         if (!dataReadResult.getBuckets().isEmpty()) {
             Log.i(TAG, "Number of returned buckets of DataSets is: " + dataReadResult
                     .getBuckets().size());
@@ -279,13 +472,11 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-
-
     // Sleep
     private void readSleepSessions() {
-         SessionsClient client = Fitness.getSessionsClient(this, account);
+        SessionsClient client = Fitness.getSessionsClient(this, account);
 
-         SessionReadRequest sessionReadRequest = new SessionReadRequest.Builder()
+        SessionReadRequest sessionReadRequest = new SessionReadRequest.Builder()
                 .read(DataType.TYPE_SLEEP_SEGMENT)
                 // By default, only activity sessions are included, not sleep sessions. Specifying
                 // includeSleepSessions also sets the behaviour to *exclude* activity sessions.
@@ -299,7 +490,7 @@ public class MainActivity extends AppCompatActivity {
                     Log.d(TAG, "readSleepSessions: Sleep session read successful");
                     try {
                         JSONObject sleepData = dumpSleepSessions(sessionReadResponse);
-                        Log.d(TAG, "readSleepSessions: "+sleepData);
+                        Log.d(TAG, "readSleepSessions: " + sleepData);
                     } catch (JSONException e) {
                         e.printStackTrace();
                     }
@@ -320,7 +511,7 @@ public class MainActivity extends AppCompatActivity {
         return sleepData;
     }
 
-    private JSONObject dumpSleepSession(Session session,List<DataSet> dataSets) throws JSONException {
+    private JSONObject dumpSleepSession(Session session, List<DataSet> dataSets) throws JSONException {
         JSONObject sleepSession = new JSONObject();
         Pair startEndTimePair = dumpSleepSessionMetadata(session);
         Long totalSleepForNight = calculateSessionDuration(session);
@@ -334,23 +525,13 @@ public class MainActivity extends AppCompatActivity {
 
     private Pair<String, String> dumpSleepSessionMetadata(Session session) {
         Pair<String, String> timePair = getSessionStartAndEnd(session);
-        String startDateTime =  timePair.first;
+        String startDateTime = timePair.first;
         String endDateTime = timePair.second;
 
         Long totalSleepForNight = calculateSessionDuration(session);
-        Log.i(TAG, startDateTime+" to "+endDateTime+" ("+totalSleepForNight+" mins)");
+        Log.i(TAG, startDateTime + " to " + endDateTime + " (" + totalSleepForNight + " mins)");
         return timePair;
     }
-
-    List<String> SLEEP_STAGES = Arrays.asList(
-            "Unused",
-            "Awake (during sleep)",
-            "Sleep",
-            "Out-of-bed",
-            "Light sleep",
-            "Deep sleep",
-            "REM sleep"
-    );
 
     private JSONArray dumpSleepDataSets(List<DataSet> dataSets) throws JSONException {
         JSONArray sleepDataPointsJson = new JSONArray();
@@ -361,7 +542,7 @@ public class MainActivity extends AppCompatActivity {
 
                 Long durationMillis = dataPoint.getEndTime(TimeUnit.MILLISECONDS) - dataPoint.getStartTime(TimeUnit.MILLISECONDS);
                 Long duration = TimeUnit.MILLISECONDS.toMinutes(durationMillis);
-                Log.i(TAG, "\t"+sleepStage+": "+duration+" (mins)");
+                Log.i(TAG, "\t" + sleepStage + ": " + duration + " (mins)");
 
                 JSONObject sleepDpJson = new JSONObject();
                 sleepDpJson.put("type", sleepStage);
@@ -372,8 +553,7 @@ public class MainActivity extends AppCompatActivity {
         return sleepDataPointsJson;
     }
 
-    private Pair<String, String> getSessionStartAndEnd(Session session)
-    {
+    private Pair<String, String> getSessionStartAndEnd(Session session) {
         DateFormat dateFormat = DateFormat.getDateTimeInstance();
         String startDateTime = dateFormat.format(session.getStartTime(TimeUnit.MILLISECONDS));
         String endDateTime = dateFormat.format(session.getEndTime(TimeUnit.MILLISECONDS));

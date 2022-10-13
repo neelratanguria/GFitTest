@@ -37,4 +37,5 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.4.0'
     implementation("com.google.android.gms:play-services-fitness:21.1.0")
     implementation("com.google.android.gms:play-services-auth:20.3.0")
+    implementation(name:'samsung-health-data-1.5.0', ext:'aar')
 }
